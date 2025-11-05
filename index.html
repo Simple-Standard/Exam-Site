@@ -313,13 +313,13 @@ let STUDENTS = [
   'Aminu Isyaku','Abubakar Usman Muhammad','Aisha Umar Sabo','Amina Aliyu Musa','Aisha Abdullahi','Fadima Muhammad Auwal',
   'Fatima Haruna Abbas','Fatima Abubakar','Hauwau Shuaibu Musa','Khadija Ibrahim Nasir','Khansau Umar Khamis','Lubabatu O Ibrahim',
   'Mubarak Abbas Shuaibu','Maryam Ahmed Umaru','Rukayya Abdulkadir Babanta','Rabiatu Abdullahi Abdulaziz','Shuaibu Rabiu SHuaibu','Umar Tanim Muhammad',
-  'umar Bello Adam','Ummahani Bashir Muhmmad','Halima Ibrahim Birma','Yusuf Abdullahi Haruna','abdulahi Alhassan Ismail','Auwal Ibrahim Abubakar',
+  'umar Bello Adam','Ummahani Bashir Muhmmad','Halima Ibrahim Birma','Yusuf Abdullahi Haruna','Abdullahi Alhassan Ismail','Auwal Ibrahim Abubakar',
   'Aisha Ahmad Khalid','Aisha Sani Ibrahim','Aisha Muazu Abubakar','Fadila Musa','Hauwau Kabir Yaro','Hauwau Musa Alhassan','Hafsat Yahya Shehu','Nasiba Khamis Adam',
   'Nuhu Shehu','Nazifi Ibrahim Shehu','Mercy Dandujit','Ummisalma Hassan','Usman Aliyu Musa','Zulaika Lawan','Uthman Abdulkadir','Ahmad Salihu','Ibrahim Aliyu'
 ].map((name,i)=>({name, examNo:`SSS/2025/3/${001+i}`, stream: i < 23 ? 'Science' : 'Social'}));
 
-const SCIENCE_SUBJECTS = ['English','Mathematics','Physics','Chemistry','Biology','Economics','Marketting','Agricultural Science','Hausa','Geography','Data Processing','Christain Religious Study','Islamic Religious Study',];
-const SOCIAL_SUBJECTS  = ['English','Mathematics','Economics','Government','Hausa','Biology','Agricultural Science','Marketting','Christain Religious Study','Islamic Religious Study','Geography','Data Processing','Literature'];
+const SCIENCE_SUBJECTS = ['English','Mathematics','Physics','Chemistry','Biology','Economics','Marketting','Agricultural Science','Hausa','Geography','Data Processing','Christain Religious Studies','Islamic Religious Study'];
+const SOCIAL_SUBJECTS  = ['English','Mathematics','Economics','Government','Hausa','Biology','Agricultural Science','Marketting','Christain Religious Science','IRS','Geography','Data Processing','Literature in English'];
 
 /* Local (in-memory) question DB used if Firebase not configured */
 let QUESTIONS_DB = {};
@@ -679,4 +679,5 @@ window.addEventListener('beforeunload', (e)=>{ if(sessionStorage.getItem('exam_i
 </script>
 </body>
 </html>
+
 

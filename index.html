@@ -1010,6 +1010,7 @@ async function populateAdmin(){
     try {
       const studentsFromDb = await fetchAllStudentsFromFirestore();
       if(studentsFromDb && studentsFromDb.length) STUDENTS = studentsFromDb;
+      STUDENTS = [...STUDENTS, ...studentsFromDb];
     } catch(e){ console.error('Unable to fetch students from Firestore', e); }
   }
   const sel = el('adminStudentSelect'); sel.innerHTML=''; const placeholder=document.createElement('option'); placeholder.value=''; placeholder.textContent='-- Select Student --'; sel.appendChild(placeholder);
@@ -1430,4 +1431,5 @@ async function saveQuestionsToFirestore(subject, questions){
 </script>
 </body>
 </html>
+
 

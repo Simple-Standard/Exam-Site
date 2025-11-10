@@ -667,9 +667,35 @@ el('adminBtn').addEventListener('click', ()=>{
 el('toStudentSelect').addEventListener('click', ()=>{ populateStudentSelect(); show(page2); });
 
 function populateStudentSelect(){
-  const sel = el('studentSelect'); sel.innerHTML='';
-  const placeholder = document.createElement('option'); placeholder.value=''; placeholder.textContent='-- Select Student --'; sel.appendChild(placeholder);
-  STUDENTS.forEach(s=>{ const o=document.createElement('option'); o.value=s.examNo; o.textContent=`${s.name} — ${s.examNo} (${s.stream})`; sel.appendChild(o); });
+  console.log('populateStudentSelect called, STUDENTS length:', Array.isArray(STUDENTS) ? STUDENTS.length : typeof STUDENTS, STUDENTS);
+  const sel = el('studentSelect');
+  if(!sel){
+    console.error('studentSelect element not found');
+    return;
+  }
+  sel.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '-- Select Student --';
+  sel.appendChild(placeholder);
+
+  if(!Array.isArray(STUDENTS) || STUDENTS.length === 0){
+    console.warn('No students available to populate studentSelect');
+    return;
+  }
+
+  STUDENTS.forEach(s => {
+    // Defensive normalization
+    const name = s.name || s.fullName || 'Unknown';
+    const examNo = s.examNo || s.id || 'N/A';
+    const stream = s.stream || 'Science';
+    const o = document.createElement('option');
+    o.value = examNo;
+    o.textContent = `${name} — ${examNo} (${stream})`;
+    sel.appendChild(o);
+  });
+
+  console.log('studentSelect populated, option count:', sel.options.length);
 }
 
 el('toHomeFromStudents').addEventListener('click', ()=> show(page1));
@@ -1005,18 +1031,52 @@ function populateResetSubjectList() {
 
 /* Admin: populate student dropdowns and results table */
 async function populateAdmin(){
-  // load students from firestore if available
+  console.log('populateAdmin called, STUDENTS length before fetch:', Array.isArray(STUDENTS) ? STUDENTS.length : typeof STUDENTS, STUDENTS);
+
+  // Try to fetch students from Firestore if available and normalize them
   if(db){
     try {
       const studentsFromDb = await fetchAllStudentsFromFirestore();
-      if(studentsFromDb && studentsFromDb.length) STUDENTS = studentsFromDb;
-      STUDENTS = [...STUDENTS, ...studentsFromDb];
-    } catch(e){ console.error('Unable to fetch students from Firestore', e); }
+      console.log('studentsFromDb from Firestore:', studentsFromDb);
+      if(Array.isArray(studentsFromDb) && studentsFromDb.length){
+        STUDENTS = studentsFromDb.map(s => ({
+          name: s.name || s.fullName || s.displayName || 'Unknown',
+          examNo: s.examNo || s.id || (s.docId || s._id) || 'N/A',
+          stream: s.stream || s.field || 'Science'
+        }));
+      }
+    } catch(e){
+      console.error('Error fetching students from Firestore in populateAdmin:', e);
+    }
   }
-  const sel = el('adminStudentSelect'); sel.innerHTML=''; const placeholder=document.createElement('option'); placeholder.value=''; placeholder.textContent='-- Select Student --'; sel.appendChild(placeholder);
-  STUDENTS.forEach(s=>{ const o=document.createElement('option'); o.value=s.examNo; o.textContent = `${s.name} — ${s.examNo}`; sel.appendChild(o); });
+
+  const sel = el('adminStudentSelect');
+  if(!sel){
+    console.error('adminStudentSelect element not found');
+    return;
+  }
+  sel.innerHTML = '';
+  const placeholder = document.createElement('option');
+  placeholder.value = '';
+  placeholder.textContent = '-- Select Student --';
+  sel.appendChild(placeholder);
+
+  if(!Array.isArray(STUDENTS) || STUDENTS.length === 0){
+    console.warn('No students available to populate adminStudentSelect');
+  } else {
+    STUDENTS.forEach(s => {
+      const name = s.name || 'Unknown';
+      const examNo = s.examNo || 'N/A';
+      const o = document.createElement('option');
+      o.value = examNo;
+      o.textContent = `${name} — ${examNo}`;
+      sel.appendChild(o);
+    });
+  }
+
+  console.log('adminStudentSelect populated, option count:', sel.options.length);
   renderResultsTable();
-  populateResetSubjectList(); // ✅ Load the subjects dropdown
+  populateResetSubjectList();
 }
 
 async function renderResultsTable(){
@@ -1126,30 +1186,37 @@ window.addEventListener('beforeunload', (e)=>{ if(sessionStorage.getItem('exam_i
 /* Initialization: load students/questions from Firestore if available */
 (async function init(){
   if(db){
-    try {
-      const studentsFromDb = await fetchAllStudentsFromFirestore();
-      if(studentsFromDb && studentsFromDb.length) STUDENTS = studentsFromDb;
-      const questionsFromDb = await fetchAllQuestionsFromFirestore();
-      if(questionsFromDb && questionsFromDb.length){
-        QUESTIONS_DB = {}; // re-build grouped by subject
-        questionsFromDb.forEach(q=>{
-          if(!QUESTIONS_DB[q.subject]) QUESTIONS_DB[q.subject]=[];
-          QUESTIONS_DB[q.subject].push(q);
-        });
+  try {
+    const studentsFromDb = await fetchAllStudentsFromFirestore();
+    console.log('init() studentsFromDb from Firestore:', studentsFromDb);
+    if(Array.isArray(studentsFromDb) && studentsFromDb.length){
+      STUDENTS = studentsFromDb.map(s => ({
+        name: s.name || s.fullName || s.displayName || 'Unknown',
+        examNo: s.examNo || s.id || (s.docId || s._id) || 'N/A',
+        stream: s.stream || s.field || 'Science'
+      }));
+    }
+    const questionsFromDb = await fetchAllQuestionsFromFirestore();
+    if(questionsFromDb && questionsFromDb.length){
+      QUESTIONS_DB = {};
+      questionsFromDb.forEach(q=>{
+        if(!QUESTIONS_DB[q.subject]) QUESTIONS_DB[q.subject] = [];
+        QUESTIONS_DB[q.subject].push(q);
+      });
+    }
+  } catch(e){ console.warn('Error preloading from Firestore', e); }
+} else {
+  // fallback: generate dummy MCQs automatically for each subject if none exist
+  [...SCIENCE_SUBJECTS, ...SOCIAL_SUBJECTS].forEach(s=>{
+    if(!QUESTIONS_DB[s] || QUESTIONS_DB[s].length===0){
+      const qs = [];
+      for(let i=1;i<=40;i++){
+        qs.push({subject:s, stream:'Both', q:`(${s}) Q${i}: Which option is correct for question ${i}?`, options:[`A. option A`,`B. option B`,`C. option C`,`D. option D`], answer: Math.floor(Math.random()*4)});
       }
-    } catch(e){ console.warn('Error preloading from Firestore', e); }
-  } else {
-    // fallback: generate dummy MCQs automatically for each subject if none exist
-    [...SCIENCE_SUBJECTS, ...SOCIAL_SUBJECTS].forEach(s=>{
-      if(!QUESTIONS_DB[s] || QUESTIONS_DB[s].length===0){
-        const qs = [];
-        for(let i=1;i<=40;i++){
-          qs.push({subject:s, stream:'Both', q:`(${s}) Q${i}: Which option is correct for question ${i}?`, options:[`A. option A`,`B. option B`,`C. option C`,`D. option D`], answer: Math.floor(Math.random()*4)});
-        }
-        QUESTIONS_DB[s] = qs;
-      }
-    });
-  }
+      QUESTIONS_DB[s] = qs;
+    }
+  });
+}
   populateStudentSelect();
   populateAdmin(); // ensure admin student dropdown is filled too
 })();
@@ -1431,5 +1498,6 @@ async function saveQuestionsToFirestore(subject, questions){
 </script>
 </body>
 </html>
+
 
 

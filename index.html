@@ -9,6 +9,9 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 
+<!-- mammoth (docx -> HTML) for client-side .docx parsing -->
+<script src="https://unpkg.com/mammoth/mammoth.browser.min.js"></script>
+
 <style>
 :root{--accent:#0b63d6;--accent2:#0ea5a4}
 body{margin:0;font-family:Times new Roman, Helvetica, sans-serif;background:linear-gradient(135deg,#eef6ff,#f7fff5);color:#0b1220}
@@ -275,6 +278,23 @@ nav button{background:transparent;border:1px solid var(--accent);padding:8px 12p
           </div>
         </div>
 
+        <!-- Bulk upload .docx questions -->
+        <div style="margin-top:12px">
+          <h5>Bulk Upload Questions (.docx)</h5>
+          <input id="questionFileInput" type="file" accept=".docx" />
+          <select id="uploadSubject" class="select" style="margin-top:8px;"></select>
+          <select id="uploadStream" class="select" style="margin-top:8px;">
+            <option value="Both">Both</option>
+            <option value="Science">Science</option>
+            <option value="Social">Social</option>
+           </select>
+          <div style="margin-top:8px">
+            <button id="parseUploadBtn" class="btn">Parse & Preview</button>
+            <button id="importUploadBtn" class="btn secondary">Import to DB</button>
+          </div>
+          <div id="uploadPreview" style="margin-top:10px"></div>
+        </div>
+
         <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;flex-wrap:wrap">
           <select id="adminStudentSelect" class="select" style="min-width:200px"></select>
           <select id="resetSubjectSelect" class="select" style="min-width:180px">
@@ -367,7 +387,7 @@ let STUDENTS = [
   'Aminu Isyaku','Abubakar Usman Muhammad','Aisha Umar Sabo','Amina Aliyu Musa','Aisha Abdullahi','Fadima Muhammad Auwal',
   'Fatima Haruna Abbas','Fatima Abubakar','Hauwau Shuaibu Musa','Khadija Ibrahim Nasir','Khansau Umar Khamis','Lubabatu O Ibrahim',
   'Mubarak Abbas Shuaibu','Maryam Ahmed Umaru','Rukaiya Salis Adam','Rukayya Abdulkadir Babanta','Rabiatu Abdullahi Abdulaziz',
-  'Shuaibu Rabiu Shuaibu','Umar Tanim Muhammad','Umar Bello Adam','Ummahani Bashir Muhammad','Halima Ibrahim Birma','Yusuf Abdullahi Haruna',
+  'Shuaibu Rabiu Shuaibu','Umar Tamim Muhammad','Umar Bello Adam','Ummahani Bashir Muhammad','Halima Ibrahim Birma','Yusuf Abdullahi Haruna',
 
   // Social Science Students
   'Abdullahi Alhassan Ismail','Auwal Ibrahim Abubakar','Aisha Ahmad Khalid','Aisha Sani Ibrahim','Aisha Muazu Abubakar',
@@ -433,9 +453,18 @@ document.addEventListener('DOMContentLoaded', () => {
   const examInput = document.getElementById('newStudentExamNo');
 
   if (streamSelect && examInput) {
-    streamSelect.addEventListener('change', () => {
+    streamSelect.addEventListener('change', async () => {
       const stream = streamSelect.value;
-      examInput.value = getNextExamNumber(stream);
+      if (!stream) {
+        examInput.value = '';
+        return;
+      }
+      try {
+        examInput.value = await getNextExamNumber(stream);
+      } catch (e) {
+        console.warn('Could not generate exam number:', e);
+        examInput.value = '';
+      }
     });
   }
 });
@@ -486,87 +515,192 @@ function populateAddQuestionSubjects() {
   });
 }
 
-/* Local (in-memory) question DB used if Firebase not configured */
-let QUESTIONS_DB = {};
-[...SCIENCE_SUBJECTS, ...SOCIAL_SUBJECTS].forEach(s=>{
-  QUESTIONS_DB[s] = [];
+// Bulk .docx upload: parse with mammoth and convert to question objects
+function normalizeOptionLabel(s){
+  return String(s).trim().replace(/^[A-Za-z][\.\)]\s*/,'').trim();
+}
+
+function parseHtmlToQuestions(htmlText, defaultSubject, defaultStream) {
+  // Convert HTML to text lines and use regex to detect question blocks
+  // We'll create an array of { q, options:[], answer, subject, stream }
+  const container = document.createElement('div');
+  container.innerHTML = htmlText;
+
+  // Get plain text lines (preserve simple formatting by joining block-level elements)
+  const lines = [];
+  container.querySelectorAll('p, li, div, h1, h2, h3, h4').forEach(el => {
+    const txt = el.textContent || '';
+    if (txt.trim()) lines.push(txt.trim());
+  });
+
+  const results = [];
+  let i = 0;
+  while (i < lines.length) {
+    // Find a Question line
+    const qLineIndex = lines.slice(i).findIndex(ln => /^(question\s*\d*[:\-\)]|^q[:\-\)])/i.test(ln) || /^q\d*[:\-\)]/i.test(ln) || /^question[:\s]/i.test(ln));
+    const start = (qLineIndex === -1) ? -1 : i + qLineIndex;
+    if (start === -1) break;
+
+    // Extract question text (may be after "Question X:" token)
+    let qLine = lines[start];
+    const qText = qLine.replace(/^(question\s*\d*[:\-\)]\s*)/i,'').replace(/^q\d*[:\-\)]\s*/i,'').trim();
+
+    // Look ahead for options A-D and Answer
+    const opts = [];
+    let answer = null;
+    let j = start + 1;
+    for (; j < Math.min(lines.length, start + 12); j++) { // scan next lines limited to 12
+      const ln = lines[j];
+      // option pattern: A. text OR A) text OR A text
+      const optMatch = ln.match(/^[A-Da-d][\.\)\-]\s*(.*)$/) || ln.match(/^[A-Da-d]\s+(.+)$/);
+      if (optMatch) {
+        opts.push(normalizeOptionLabel(ln));
+        continue;
+      }
+      // Answer line
+      const ansMatch = ln.match(/^(answer|ans)[:\s]*([A-Da-d0-3])/i);
+      if (ansMatch) {
+        const a = ansMatch[2].toUpperCase();
+        // convert letter to index
+        if (/[A-D]/.test(a)) answer = ['A','B','C','D'].indexOf(a);
+        else if (/[0-3]/.test(a)) answer = parseInt(a,10);
+        j++;
+        break;
+      }
+      // If blank line, might be end of block
+      if (!ln.trim()) {
+        j++;
+        break;
+      }
+      // If reached something that looks like the next question, break
+      if (/^(question\s*\d*[:\-\)]|^q[:\-\)])/i.test(ln)) break;
+      // otherwise skip (could be part of extended question text)
+    }
+
+    // If we got at least 1 option and question text
+    if (qText && opts.length >= 2) {
+      // ensure exactly 4 options: if fewer, still add but must handle in import validation
+      const qObj = {
+        subject: defaultSubject || 'General',
+        stream: defaultStream || 'Both',
+        q: qText,
+        options: opts,
+        answer: (typeof answer === 'number') ? answer : null
+      };
+      results.push(qObj);
+    }
+
+    i = Math.max(j, start + 1);
+  }
+
+  return results;
+}
+
+// Wire UI
+function ensureUploadSubjectOptions() {
+  const sel = el('uploadSubject');
+  if (!sel) return;
+  sel.innerHTML = '';
+  const subjects = [...new Set([...SCIENCE_SUBJECTS, ...SOCIAL_SUBJECTS])].sort();
+  subjects.forEach(s => { const o = document.createElement('option'); o.value = s; o.textContent = s; sel.appendChild(o); });
+}
+
+// Call this at init or when admin opens panel
+ensureUploadSubjectOptions();
+
+el('parseUploadBtn')?.addEventListener('click', async () => {
+  const fileInput = el('questionFileInput');
+  const subject = el('uploadSubject')?.value || '';
+  const stream = el('uploadStream')?.value || 'Both';
+  const preview = el('uploadPreview');
+  preview.innerHTML = '';
+  if (!fileInput || !fileInput.files || fileInput.files.length === 0) return alert('Select a .docx file first');
+  const file = fileInput.files[0];
+  if (!/\.docx$/i.test(file.name)) return alert('Please upload a .docx file (not .doc).');
+
+  try {
+    const arrayBuffer = await file.arrayBuffer();
+    const result = await window.mammoth.convertToHtml({ arrayBuffer: arrayBuffer });
+    const html = result.value; // HTML string
+
+    const parsed = parseHtmlToQuestions(html, subject, stream);
+    if (!parsed.length) {
+      preview.innerHTML = '<div class="small">No questions found — ensure document follows the required format.</div>';
+      return;
+    }
+
+    // Show preview (first 10)
+    preview.innerHTML = `<div class="small">Found ${parsed.length} question(s). Preview:</div>`;
+    const list = document.createElement('div');
+    parsed.slice(0, 20).forEach((q, idx) => {
+      const d = document.createElement('div');
+      d.style.border = '1px solid #eef5ff';
+      d.style.padding = '8px';
+      d.style.marginTop = '8px';
+      d.innerHTML = `<strong>Q${idx+1}:</strong> ${q.q}<br/><em>Options:</em> ${q.options.map((o,i)=>`(${String.fromCharCode(65+i)}) ${o}`).join(' ')}<br/><em>Answer:</em> ${q.answer !== null ? String.fromCharCode(65+q.answer) : 'None'}`;
+      list.appendChild(d);
+    });
+    preview.appendChild(list);
+
+    // Save parsed to an in-memory variable for later import
+    window.__parsedUploadQuestions = parsed;
+
+  } catch (err) {
+    console.error('Error parsing .docx:', err);
+    alert('Error reading file: ' + err.message);
+  }
 });
 
-// Add questions manually for each subject
-QUESTIONS_DB["Mathematics"] = [
-  { q: "What is 2 + 2?", options: ["2","3","4","5"], answer: "4" },
-  { q: "Simplify 10 ÷ 2", options: ["2","5","10","20"], answer: "5" }
-];
+el('importUploadBtn')?.addEventListener('click', async () => {
+  const preview = el('uploadPreview');
+  const qs = window.__parsedUploadQuestions;
+  if (!qs || !qs.length) return alert('No parsed questions to import. Click Parse & Preview first.');
 
-QUESTIONS_DB["English Language"] = [
-  { q: "Choose the correct verb: He ___ to school.", options: ["go","goes","going","gone"], answer: "goes" },
-  { q: "What is the plural of 'child'?", options: ["childs","childes","children","child"], answer: "children" }
-];
+  // Confirm import count
+  if (!confirm(`Import ${qs.length} questions into "${el('uploadSubject').value}" (stream: ${el('uploadStream').value})?`)) return;
 
-QUESTIONS_DB["Physics"] = [
-  { q: "What is the SI unit of force?", options: ["Joule","Newton","Pascal","Watt"], answer: "Newton" },
-  { q: "What does a voltmeter measure?", options: ["Voltage","Current","Resistance","Power"], answer: "Voltage" }
-];
+  // Disable button during import to prevent duplicate writes
+  el('importUploadBtn').disabled = true;
 
-QUESTIONS_DB["Chemistry"] = [
-  { q: "What is the chemical symbol of water?", options: ["H2O","O2","CO2","NaCl"], answer: "H2O" },
-  { q: "Which gas supports combustion?", options: ["Oxygen","Carbon dioxide","Nitrogen","Hydrogen"], answer: "Oxygen" }
-];
+  let added = 0, skipped = 0;
+  for (const q of qs) {
+    // normalize to ensure options length 4; pad or trim if necessary
+    const obj = {
+      subject: el('uploadSubject').value || q.subject || 'General',
+      stream: el('uploadStream').value || q.stream || 'Both',
+      q: q.q,
+      options: q.options.slice(0,4).concat(new Array(Math.max(0,4 - q.options.length)).fill('Option')),
+      answer: (typeof q.answer === 'number') ? q.answer : null
+    };
 
-QUESTIONS_DB["Biology"] = [
-  { q: "What is 2 + 2?", options: ["2","3","4","5"], answer: "4" },
-  { q: "Simplify 10 ÷ 2", options: ["2","5","10","20"], answer: "5" }
-];
+    try {
+      const saved = await saveQuestionToFirestore(obj);
+      if (saved) added++; else skipped++;
+    } catch (e) {
+      console.error('Error saving question:', e);
+      // continue
+    }
+  }
 
-QUESTIONS_DB["Government"] = [
-  { q: "Choose the correct verb: He ___ to school.", options: ["go","goes","going","gone"], answer: "goes" },
-  { q: "What is the plural of 'child'?", options: ["childs","childes","children","child"], answer: "children" }
-];
+  el('importUploadBtn').disabled = false;
+  alert(`Import complete. Added: ${added}. Skipped (duplicates): ${skipped}.`);
+  // refresh client DB
+  if (db) {
+    const snap = await getDocs(collection(db, 'questions'));
+    const grouped = {};
+    snap.forEach(docSnap => {
+      const d = docSnap.data();
+      if (!grouped[d.subject]) grouped[d.subject] = [];
+      grouped[d.subject].push(d);
+    });
+    QUESTIONS_DB = grouped;
+  }
+  await populateAdmin();
+  preview.innerHTML += `<div class="small" style="margin-top:8px">Import finished. Added ${added}, skipped ${skipped}.</div>`;
+});
 
-QUESTIONS_DB["Literature in English"] = [
-  { q: "What is the SI unit of force?", options: ["Joule","Newton","Pascal","Watt"], answer: "Newton" },
-  { q: "What does a voltmeter measure?", options: ["Voltage","Current","Resistance","Power"], answer: "Voltage" }
-];
-
-QUESTIONS_DB["Civic Education"] = [
-  { q: "What is the chemical symbol of water?", options: ["H2O","O2","CO2","NaCl"], answer: "H2O" },
-  { q: "Which gas supports combustion?", options: ["Oxygen","Carbon dioxide","Nitrogen","Hydrogen"], answer: "Oxygen" }
-];
-
-QUESTIONS_DB["Geography"] = [
-  { q: "What is 2 + 2?", options: ["2","3","4","5"], answer: "4" },
-  { q: "Simplify 10 ÷ 2", options: ["2","5","10","20"], answer: "5" }
-];
-
-QUESTIONS_DB["Agricultural Science"] = [
-  { q: "Choose the correct verb: He ___ to school.", options: ["go","goes","going","gone"], answer: "goes" },
-  { q: "What is the plural of 'child'?", options: ["childs","childes","children","child"], answer: "children" }
-];
-
-QUESTIONS_DB["Data Processing"] = [
-  { q: "What is the SI unit of force?", options: ["Joule","Newton","Pascal","Watt"], answer: "Newton" },
-  { q: "What does a voltmeter measure?", options: ["Voltage","Current","Resistance","Power"], answer: "Voltage" }
-];
-
-QUESTIONS_DB["Economics"] = [
-  { q: "What is the chemical symbol of water?", options: ["H2O","O2","CO2","NaCl"], answer: "H2O" },
-  { q: "Which gas supports combustion?", options: ["Oxygen","Carbon dioxide","Nitrogen","Hydrogen"], answer: "Oxygen" }
-];
-
-QUESTIONS_DB["Marketting"] = [
-  { q: "What is 2 + 2?", options: ["2","3","4","5"], answer: "4" },
-  { q: "Simplify 10 ÷ 2", options: ["2","5","10","20"], answer: "5" }
-];
-
-QUESTIONS_DB["Islamic Studies"] = [
-  { q: "Choose the correct verb: He ___ to school.", options: ["go","goes","going","gone"], answer: "goes" },
-  { q: "What is the plural of 'child'?", options: ["childs","childes","children","child"], answer: "children" }
-];
-
-QUESTIONS_DB["Hausa"] = [
-  { q: "What is the SI unit of force?", options: ["Joule","Newton","Pascal","Watt"], answer: "Newton" },
-  { q: "What does a voltmeter measure?", options: ["Voltage","Current","Resistance","Power"], answer: "Voltage" }
-];
+/* Local (in-memory) question DB used if Firebase not configured */
+let QUESTIONS_DB = {};
 
 /* Utility */
 function el(id){ return document.getElementById(id); }
@@ -590,47 +724,89 @@ async function saveStudentToFirestore(student){
   if(!db) return false;
   const col = collection(db, 'students');
   // use examNo as doc id
-  await setDoc(doc(db, 'students', student.examNo), student);
+  const safeId = student.examNo.replace(/\//g, '_'); // SS3_2025_1001
+  await setDoc(doc(db, 'students', safeId), {...student, examNo: student.examNo});
   return true;
 }
 async function fetchAllStudentsFromFirestore(){
   if(!db) return null;
   const snap = await getDocs(collection(db, 'students'));
   const arr = [];
-  snap.forEach(d => arr.push(d.data()));
+  snap.forEach(d => {
+    // Ensure we include the doc id (examNo) so callers can merge/lookup reliably
+    const data = d.data();
+    // If examNo is absent in the document fields, use the doc id which you set when saving
+    if (!data.examNo) data.examNo = d.id;
+    arr.push(data);
+  });
   return arr;
 }
-async function saveQuestionToFirestore(question){
-  if(!db) return false;
-  await addDoc(collection(db, 'questions'), question);
-  return true;
+// Helper: create a stable key for a question (subject + normalized text + options)
+function questionKey(qObj){
+  const txt = (qObj.q || qObj.question || '').trim().replace(/\s+/g,' ').toLowerCase();
+  const opts = (qObj.options || []).map(o => (o||'').trim().replace(/\s+/g,' ').toLowerCase()).join('|');
+  return `${qObj.subject}::${txt}::${opts}`;
 }
-async function fetchAllQuestionsFromFirestore(selectedSubject){
+
+async function saveQuestionToFirestore(question){
+  if(!db) {
+    // when no DB, still avoid exact duplicates in QUESTIONS_DB
+    if(!QUESTIONS_DB[question.subject]) QUESTIONS_DB[question.subject] = [];
+    const key = questionKey(question);
+    const exists = QUESTIONS_DB[question.subject].some(q => questionKey(q) === key);
+    if(exists) return false;
+    QUESTIONS_DB[question.subject].push(question);
+    return true;
+  }
+
+  try {
+    // Build a client-side key for the incoming question
+    const newKey = questionKey(question);
+
+    // Fetch all questions for that subject from Firestore once
+    const qRef = query(collection(db, 'questions'), where('subject','==', question.subject));
+    const snap = await getDocs(qRef);
+    // Check whether any doc in Firestore matches the normalized key
+    for(const docSnap of snap.docs){
+      const data = docSnap.data();
+      if(questionKey(data) === newKey){
+        console.log('Duplicate question detected in Firestore; skipping add:', question.subject, question.q);
+        return false;
+      }
+    }
+
+    // No duplicate -> add
+    await addDoc(collection(db, 'questions'), question);
+    return true;
+  } catch (err) {
+    console.error('Error in saveQuestionToFirestore:', err);
+    throw err;
+  }
+}
+
+  async function fetchAllQuestionsFromFirestore(selectedSubject){
   let arr = [];
 
-  // 🔹 Try to fetch from Firebase if available
+  // Try to fetch from Firebase if available
   if (db) {
     try {
       const snap = await getDocs(collection(db, 'questions'));
-      snap.forEach(d => arr.push(Object.assign({id: d.id}, d.data())));
+      snap.forEach(d => arr.push(Object.assign({ id: d.id }, d.data())));
       console.log("Loaded questions from Firebase:", arr.length);
     } catch (err) {
       console.warn("Error loading from Firestore:", err);
     }
   }
 
-  // 🔹 If Firebase is missing or empty, use local fallback
-  if (!arr || arr.length === 0) {
-    if (selectedSubject && QUESTIONS_DB[selectedSubject]) {
-      arr = QUESTIONS_DB[selectedSubject];
-      console.log("Loaded local questions for:", selectedSubject, arr.length);
-    } else {
-      console.warn("No local questions found for:", selectedSubject);
-    }
+  // Fallback to local QUESTIONS_DB for the selected subject when needed
+  if ((!arr || arr.length === 0) && selectedSubject && QUESTIONS_DB[selectedSubject]) {
+    arr = QUESTIONS_DB[selectedSubject];
+    console.log("Loaded local questions for:", selectedSubject, arr.length);
   }
 
   return arr;
 }
+
 async function saveResultToFirestore(result){
   if(!db) return false;
   await addDoc(collection(db, 'results'), result);
@@ -772,11 +948,41 @@ el('beginExam').addEventListener('click', async () => {
     student: stu,
     subject: subj,
     examNo: stu.examNo,
-    questions: selected.map(q => ({
-      q: q.q || q.question || ('No question'),
-      options: q.options || q.optionsArr || ['A', 'B', 'C', 'D'],
-      answer: typeof q.answer !== 'undefined' ? q.answer : null
-    })),
+   questions: selected.map(q => {
+  const opts = q.options || q.optionsArr || ['A','B','C','D'];
+
+  // compute numeric index for the stored answer (if possible)
+  let answerIndex = null;
+
+  if (typeof q.answer === 'number' && !isNaN(q.answer)) {
+  answerIndex = q.answer;
+} else if (typeof q.answer === 'string' && q.answer.trim() !== '') {
+  const a = q.answer.trim();
+
+  // 1) if user stored letter 'A' / 'B' / 'C' / 'D'
+  const letter = a.toUpperCase();
+  if (['A','B','C','D'].includes(letter)) {
+    answerIndex = ['A','B','C','D'].indexOf(letter);
+  } else {
+    // 2) *** NEW LOGIC ***
+    // ONLY try to parse it as a number. Do NOT match text.
+    const num = parseInt(a, 10);
+    if (!isNaN(num)) {
+      answerIndex = num;
+    }
+    // We have removed the 'findByText' and 'findCI' blocks
+  }
+}
+
+  // ensure answerIndex is null or a number 0..3
+  if (typeof answerIndex === 'number' && (answerIndex < 0 || answerIndex >= opts.length)) answerIndex = null;
+
+  return {
+    q: q.q || q.question || 'No question',
+    options: opts,
+    answer: (typeof answerIndex === 'number') ? answerIndex : null
+  };
+}),
     answers: Array(selected.length).fill(null),
     started: false,
     startTimestamp: null,
@@ -810,7 +1016,7 @@ function startTimer(){ if(examTimer) clearInterval(examTimer); examTimer = setIn
 el('submitExam').addEventListener('click', ()=>{ if(!confirm('Submit exam now?')) return; submitExam(false); });
 async function submitExam(isAuto){
   const state = JSON.parse(sessionStorage.getItem('examState')); if(!state) return;
-  let correct = 0; for(let i=0;i<state.questions.length;i++){ const q = state.questions[i]; if(state.answers[i] !== null && typeof q.answer !== 'undefined' && state.answers[i] === q.answer) correct++; }
+  let correct = 0; for(let i=0;i<state.questions.length;i++){ const q = state.questions[i]; if(state.answers[i] !== null && typeof q.answer !== 'undefined' && state.answers[i] == q.answer) correct++; }
   const total = state.questions.length; const score = Math.round((correct/total)*100);
 
   // build result object
@@ -987,22 +1193,52 @@ el('addStudentBtn').addEventListener('click', async () => {
 });
 
 /* Admin: add question */
-el('addQuestionBtn').addEventListener('click', async ()=>{
+el('addQuestionBtn').addEventListener('click', async ()=> {
   const subject = el('addQSubject').value;
   const stream = el('addQStream').value;
   const qtext = el('newQuestionText').value.trim();
-  const options = [el('optA').value, el('optB').value, el('optC').value, el('optD').value];
+  const options = [el('optA').value.trim(), el('optB').value.trim(), el('optC').value.trim(), el('optD').value.trim()];
   const answer = parseInt(el('correctOption').value, 10);
-  if(!qtext || options.some(o=>!o)) return alert('Provide question and all options');
+
+  if (!qtext || options.some(o => !o)) return alert('Provide question and all options');
+
   const qObj = { subject, stream, q: qtext, options, answer };
-  if(db){
-    try { await saveQuestionToFirestore(qObj); } catch(e){ console.error(e); alert('Error saving question to Firestore'); }
-  } else {
-    if(!QUESTIONS_DB[subject]) QUESTIONS_DB[subject]=[];
-    QUESTIONS_DB[subject].push(qObj);
+
+  try {
+    // Save using dedup-protected function
+    const saved = await saveQuestionToFirestore(qObj);
+
+    if (!saved) {
+      alert('⚠️ This question already exists. No duplicate added.');
+    } else {
+      alert('✅ Question added');
+    }
+
+    // Clear inputs
+    el('newQuestionText').value=''; el('optA').value=''; el('optB').value=''; el('optC').value=''; el('optD').value='';
+
+    // If using Firestore, reload QUESTIONS_DB from Firestore so client state stays authoritative
+    if (db) {
+      const snap = await getDocs(collection(db, 'questions'));
+      const grouped = {};
+      snap.forEach(docSnap => {
+        const d = docSnap.data();
+        if (!grouped[d.subject]) grouped[d.subject] = [];
+        grouped[d.subject].push(d);
+      });
+      QUESTIONS_DB = grouped;
+    } else {
+      // If local only, QUESTIONS_DB already updated by saveQuestionToFirestore fallback
+    }
+
+    // Refresh admin UI lists
+    await populateAdmin();
+    populateAddQuestionSubjects();
+
+  } catch (err) {
+    console.error('Error adding question:', err);
+    alert('Error saving question: ' + (err.message || err));
   }
-  el('newQuestionText').value=''; el('optA').value=''; el('optB').value=''; el('optC').value=''; el('optD').value='';
-  alert('Question added');
 });
 
 /* =============== RESET SINGLE SUBJECT ATTEMPT LOGIC =============== */
@@ -1412,31 +1648,30 @@ el('editQuestionsBtn').addEventListener('click', async ()=>{
 // ✅ Improved: load subjects and questions directly from Firestore
 async function loadSubjectsToEdit() {
   editSubjectSelect.innerHTML = '<option value="">-- Select Subject --</option>';
-
   let subjects = [];
 
   if (db) {
-    // 🔹 Load all questions from Firestore
+    // Load all questions from Firestore and group them, deduplicating by normalized key
     const snap = await getDocs(collection(db, 'questions'));
-    const firestoreQuestions = [];
-    snap.forEach(docSnap => firestoreQuestions.push(docSnap.data()));
+    const tmpGrouped = {};
+    const seenKeys = new Set();
 
-    // 🔹 Group by subject
-    const grouped = {};
-    firestoreQuestions.forEach(q => {
-      if (!grouped[q.subject]) grouped[q.subject] = [];
-      grouped[q.subject].push(q);
+    snap.forEach(docSnap => {
+      const data = docSnap.data();
+      const key = questionKey(data);
+      if (seenKeys.has(key)) return; // skip duplicates if any
+      seenKeys.add(key);
+
+      if (!tmpGrouped[data.subject]) tmpGrouped[data.subject] = [];
+      tmpGrouped[data.subject].push(data);
     });
 
-    // 🔹 Replace local QUESTIONS_DB with full set
-    QUESTIONS_DB = grouped;
-    subjects = Object.keys(grouped);
+    QUESTIONS_DB = tmpGrouped;
+    subjects = Object.keys(tmpGrouped);
   } else {
-    // fallback local
     subjects = Object.keys(QUESTIONS_DB || {});
   }
 
-  // Populate the dropdown
   subjects.sort().forEach(subj => {
     const opt = document.createElement('option');
     opt.value = subj;
@@ -1481,7 +1716,7 @@ el('saveQuestionChanges').addEventListener('click', async ()=>{
   const qs = QUESTIONS_DB[subj] || [];
   document.querySelectorAll('.q-text').forEach(t=>{
     const i = +t.dataset.qindex;
-    if(qs[i]) qs[i].question = t.value.trim();
+    if(qs[i]) qs[i].q = t.value.trim();
   });
   document.querySelectorAll('.q-option').forEach(o=>{
     const i = +o.dataset.qindex, j = +o.dataset.oindex;
@@ -1489,8 +1724,7 @@ el('saveQuestionChanges').addEventListener('click', async ()=>{
   });
   document.querySelectorAll('.q-answer').forEach(a=>{
     const i = +a.dataset.qindex;
-    if(qs[i]) qs[i].answer = a.value.trim();
-  });
+    if(qs[i]) qs[i].answer = parseInt(a.value.trim(), 10);  });
 
   if(db){
     try {
@@ -1533,5 +1767,6 @@ async function saveQuestionsToFirestore(subject, questions) {
 </script>
 </body>
 </html>
+
 
 

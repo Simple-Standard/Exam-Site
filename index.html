@@ -169,7 +169,7 @@ nav button{background:transparent;border:1px solid var(--accent);padding:8px 12p
             <div class="small">Student: <span id="examStudentName"></span> — Exam No: <span id="examStudentNo"></span></div>
           </div>
           <div style="text-align:right">
-            <div style="font-weight:800;color:#0b63d6" id="timerDisplay">30:00</div>
+            <div style="font-weight:800;color:#0b63d6" id="timerDisplay">15:00</div>
             <div class="small">Time remaining</div>
           </div>
         </div>
@@ -198,7 +198,7 @@ nav button{background:transparent;border:1px solid var(--accent);padding:8px 12p
             <ul class="small">
               <li>20 questions per subject (randomized from question bank).</li>
               <li>5 questions shown at a time.</li>
-              <li>Total time: 30 minutes. Auto-submit when time runs out.</li>
+              <li>Total time: 15 minutes. Auto-submit when time runs out.</li>
             </ul>
           </div>
         </div>
@@ -897,7 +897,7 @@ el('beginExam').addEventListener('click', async () => {
 
   // 🔹 Load exam settings
   const settings = JSON.parse(localStorage.getItem('exam_settings') || '{}');
-  const config = settings[subj] || { attempts: 1, duration: 30, date: '' };
+  const config = settings[subj] || { attempts: 1, duration: 15, date: '' };
 
   // 🔸 Normalize and check date restriction
   if (config.date) {
@@ -986,7 +986,7 @@ el('beginExam').addEventListener('click', async () => {
     answers: Array(selected.length).fill(null),
     started: false,
     startTimestamp: null,
-    durationSeconds: (config.duration || 30) * 60
+    durationSeconds: (config.duration || 15) * 60
   };
 
   // 🔹 Save and start exam
@@ -1554,7 +1554,7 @@ el('saveExamDetails').addEventListener('click', () => {
   document.querySelectorAll('#examDetailsTable tr[data-subject]').forEach(row => {
     const subj = row.dataset.subject;
     const attempts = parseInt(row.querySelector('.attempt').value) || 1;
-    const duration = parseInt(row.querySelector('.duration').value) || 30;
+    const duration = parseInt(row.querySelector('.duration').value) || 15;
     const date = row.querySelector('.date').value || '';
     settings[subj] = { attempts, duration, date };
   });
@@ -1578,7 +1578,7 @@ function populateExamDetailsTable() {
       <tr data-subject="${subj}">
         <td>${subj}</td>
         <td><input type="number" class="attempt" min="1" max="10" value="${config.attempts || 1}"></td>
-        <td><input type="number" class="duration" min="5" max="180" value="${config.duration || 30}"></td>
+        <td><input type="number" class="duration" min="5" max="180" value="${config.duration || 15}"></td>
         <td><input type="date" class="date" value="${config.date || ''}"></td>
       </tr>
     `;
@@ -1776,6 +1776,7 @@ async function saveQuestionsToFirestore(subject, questions) {
 </script>
 </body>
 </html>
+
 
 
 

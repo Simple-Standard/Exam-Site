@@ -1028,7 +1028,9 @@ async function submitExam(isAuto){
     correct,
     total,
     timestamp: new Date().toISOString(),
-    stream: state.student.stream
+    stream: state.student.stream,
+    answers: state.answers, 
+    questions: state.questions.map(q => ({ q: q.q, answer: q.answer }))
   };
 
   try {
@@ -1595,44 +1597,51 @@ function populateExamDetailsTable() {
 }
 
 /* ==================== RESET SUBJECT ATTEMPT FIX ==================== */
-document.addEventListener('DOMContentLoaded', () => {
-  const resetBtn = document.getElementById('resetSubjectBtn');
-  if (!resetBtn) return;
 
-  resetBtn.addEventListener('click', async () => {   // ✅ add "async" here
-    const examNo = document.getElementById('adminStudentSelect').value;
-    const subject = document.getElementById('resetSubjectSelect').value;
+el('resetSubjectBtn').addEventListener('click', async () => {
+    const examNo = el('adminStudentSelect').value;
+    const subject = el('resetSubjectSelect').value;
 
     if (!examNo) return alert('❌ Please select a student first.');
     if (!subject) return alert('❌ Please select a subject to reset.');
+    if (!db) return alert('❌ Firebase not connected. Cannot reset.');
 
-    const confirmReset = confirm(`⚠️ This will delete "${subject}" exam attempt for student ${examNo}. Continue?`);
+    const confirmReset = confirm(`⚠️ This will permanently delete "${subject}" exam attempt(s) for student ${examNo}. This is required for a re-take. Continue?`);
     if (!confirmReset) return;
 
-    let results = [];
+    try {
+        // 1. Find the specific results to delete from Firebase
+        const q = query(collection(db, 'results'), 
+            where('examNo', '==', examNo), 
+            where('subject', '==', subject)
+        );
+        
+        const snapshot = await getDocs(q);
+        if (snapshot.empty) {
+            return alert(`⚠️ No "${subject}" exam record found in Firebase for student ${examNo}.`);
+        }
 
-    if (db) {
-      try { 
-        results = await fetchAllResults();   // now valid
-      } catch (e) { 
-        console.warn("Error fetching from Firestore", e); 
-      }
-    } else {
-      results = JSON.parse(localStorage.getItem('sss_results_v1') || '[]');
+        let deletedCount = 0;
+        const batch = writeBatch(db);
+        
+        // 2. Add all found documents to a delete batch
+        snapshot.forEach(doc => {
+            batch.delete(doc.ref);
+            deletedCount++;
+        });
+        
+        // 3. Commit the batch
+        await batch.commit();
+
+        alert(`✅ Successfully deleted ${deletedCount} attempt(s) for "${subject}" for student ${examNo}. The student can now retake this exam.`);
+        
+        // 4. Refresh the admin results table
+        await renderResultsTable();
+
+    } catch (err) {
+        console.error("Error resetting subject:", err);
+        alert('❌ An error occurred while deleting the result: ' + err.message);
     }
-
-    const beforeCount = results.length;
-    results = results.filter(r => !(r.examNo === examNo && r.subject === subject));
-    const removed = beforeCount - results.length;
-    localStorage.setItem('sss_results_v1', JSON.stringify(results));
-
-    if (removed > 0) {
-      alert(`✅ Successfully cleared "${subject}" attempt for student ${examNo}.`);
-      renderResultsTable();
-    } else {
-      alert(`⚠️ No "${subject}" exam record found for student ${examNo}.`);
-    }
-  });
 });
 
 /* ========== EDIT QUESTIONS FEATURE ========== */
@@ -1767,6 +1776,7 @@ async function saveQuestionsToFirestore(subject, questions) {
 </script>
 </body>
 </html>
+
 
 
 
